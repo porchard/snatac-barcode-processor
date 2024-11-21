@@ -1,5 +1,6 @@
 use std::fs::File;
 use std::collections::{HashSet,HashMap};
+use std::cmp;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
@@ -9,7 +10,24 @@ use itertools::izip;
 use log::info;
 use crate::trie::Trie;
 
-fn likelihood_of_errors (uncorrected: &[u8], corrected: &[u8], phred: &[u8]) -> f64 {
+
+
+// struct BarcodeCorrector {
+//     whitelist: HashSet<&[u8]>,
+
+// }
+
+
+
+
+// To match CellRanger corrections, max_allowed_quality should be 66
+fn probability_of_incorrect_base_call(quality_score: &u8, max_quality_score: &u8) -> f64 {
+    let q = (cmp::min(*quality_score, *max_quality_score) as f64) - 33.0;
+    let power_base: f64 = 10.0;
+    power_base.powf(-1.0 * q / 10.0)
+}
+
+fn probability_of_incorrect_base_calls(uncorrected: &[u8], corrected: &[u8], phred: &[u8]) -> f64 {
 
     assert_eq!(uncorrected.len(), corrected.len());
     
@@ -17,10 +35,7 @@ fn likelihood_of_errors (uncorrected: &[u8], corrected: &[u8], phred: &[u8]) -> 
     
     for (u, c, p) in izip!(uncorrected, corrected, phred) {
         if u != c {
-            let power_base: f64 = 10.0;
-            let q: f64 = (*p as f64) - 33.0;
-            let byte_l: f64 = power_base.powf(-1.0 * q / 10.0);
-            l *= byte_l;
+            l *= probability_of_incorrect_base_call(p, &66);
         }
     }
 
@@ -41,16 +56,23 @@ fn correct_barcode<'a> (uncorrected: &[u8], uncorrected_phred: &[u8], similar: &
     } else if similar.len() == 1 {
         return Some(similar[0]);
     } else {
-        let likelihood_of_errors: Vec<f64> = similar.iter().map(|&s| likelihood_of_errors(uncorrected, s, uncorrected_phred)).collect();
-        let likelihood: Vec<f64> = likelihood_of_errors.iter().zip(similar_counts.iter()).map(|(&i, &&j)| i*(j as f64)).collect();
-        let norm_factor: f64 = likelihood.iter().sum();
-        let norm_likelihoods: Vec<f64> = likelihood.iter().map(|i| i / norm_factor).collect();
+        let probability_of_errors: Vec<f64> = similar.iter().map(|&s| probability_of_incorrect_base_calls(uncorrected, s, uncorrected_phred)).collect();
+        //let likelihood: Vec<f64> = probability_of_errors.iter().zip(similar_counts.iter()).map(|(&i, &&j)| i*(j as f64)).collect();
+        let probability_of_errors_times_count: Vec<f64> = izip!(probability_of_errors, similar_counts).map(|(i, &&j)| i*(j as f64)).collect();
+        let norm_factor: f64 = probability_of_errors_times_count.iter().sum();
+        let posteriors: Vec<f64> = probability_of_errors_times_count.iter().map(|i| i / norm_factor).collect();
 
-        for (i, &correction) in similar.iter().enumerate() {
-            if norm_likelihoods[i] >= 0.975 {
+        for (&correction, p) in izip!(similar, posteriors) {
+            if p >= 0.975 {
                 return Some(correction);
             }
         }
+
+        // for (i, &correction) in similar.iter().enumerate() {
+        //     if posteriors[i] >= 0.975 {
+        //         return Some(correction);
+        //     }
+        // }
     }
 
     None
@@ -96,7 +118,7 @@ pub fn correct_barcodes_in_fastq (input_fastq_filename: &str, whitelist_filename
     let fastq_in = BufReader::new(GzDecoder::new(File::open(input_fastq_filename).unwrap()));
     let fastq_reader = fastq::Reader::from_bufread(fastq_in);
 
-    let fastq_out = BufWriter::new(GzEncoder::new(File::create(output_fastq_filename).unwrap(), Compression::default()));
+    let fastq_out = BufWriter::new(GzEncoder::new(File::create(output_fastq_filename).unwrap(), Compression::fast()));
     let mut fastq_writer = fastq::Writer::from_bufwriter(fastq_out);
 
     let mut matched_whitelist_before_correction: usize = 0;

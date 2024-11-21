@@ -155,7 +155,7 @@ pub fn transform_fastq_file (input_fastq_filename: &str, whitelist_filename: &st
     let fastq_in = BufReader::new(GzDecoder::new(File::open(input_fastq_filename).unwrap()));
     let fastq_reader = fastq::Reader::from_bufread(fastq_in);
 
-    let fastq_out = BufWriter::new(GzEncoder::new(File::create(output_fastq_filename).unwrap(), Compression::default()));
+    let fastq_out = BufWriter::new(GzEncoder::new(File::create(output_fastq_filename).unwrap(), Compression::fast()));
     let mut fastq_writer = fastq::Writer::from_bufwriter(fastq_out);
 
     let mut matched_whitelist: usize = 0;
